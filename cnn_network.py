@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 import tensorflow as tf
-from tensorflow.keras import layers, models
+from tensorflow.python.keras import layers, models
 
 # Load the images
 green_dots_image = cv2.imread('green_dots_on_white.jpg', cv2.IMREAD_COLOR)

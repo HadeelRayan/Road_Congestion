@@ -1,6 +1,7 @@
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv2D, Flatten, Dense
+from tensorflow.python.keras.models import Sequential
+from tensorflow.python.keras.layers import Conv2D, Flatten, Dense
+
 
 # Assuming preprocessed images are stacked into a single multi-channel image
 input_shape = (height, width, channels)  # height and width of your preprocessed images, channels=3
