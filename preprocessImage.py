@@ -30,5 +30,6 @@ def main():
     cnn_input = np.stack((green_dots_image, convex_hull_image, heatmap_image), axis=-1)
     return cnn_input
 
+
 if __name__ == "__main__":
     main()

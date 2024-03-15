@@ -1,6 +1,7 @@
 import tensorflow as tf
-from tensorflow.keras import layers, models
+from tensorflow.python.keras import layers, models
 import preprocessImage as pp
+
 
 input_shape = (128, 128, 3)  # Height = 128, Width = 128, Channels = 3
 cnn_input = pp.main()

@@ -1,6 +1,7 @@
 import numpy as np
 import cv2
 
+
 if __name__ == "__main__":
     image = cv2.imread('HeatMapWithTrafficLight_full.jpg')
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
