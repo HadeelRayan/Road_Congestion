@@ -1,6 +1,4 @@
-
 import sys
-
 import cv2
 import gymnasium
 import numpy as np
@@ -31,8 +29,8 @@ class PIEnv(gymnasium.Env):
 
         ## find the green zones and their coordinates
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        lower_green = np.array([0, 150, 0])
-        upper_green = np.array([100, 255, 100])
+        lower_green = np.array([40, 150, 150]) #[0, 150, 0]
+        upper_green = np.array([80, 255, 255]) #[100, 255, 100]
         mask_dark_green = cv2.inRange(image_rgb, lower_green, upper_green)
         # Find contours of dark green dots within the red shape
         contours_dark_green, _ = cv2.findContours(mask_dark_green, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -54,7 +52,7 @@ class PIEnv(gymnasium.Env):
         for key, val in self.intersection_dict.items():
             self.intersection_state_dict[key] = False
 
-        # action space is an scalar integer representing the index of an intersection
+        # action space is a scalar integer representing the index of an intersection
         self.action_space = gymnasium.spaces.Discrete(len(self.intersection_dict))
 
     def reset(self, seed=None):
@@ -119,7 +117,7 @@ class PIEnv(gymnasium.Env):
         enders a viewable image of the city section with the current convex hull and the intersections
         :return:
         The original clean image in RGB, and the contour of the convex hull drawn on it.
-        Additionally all the intersections are drawn as circles, white circles represent active intersections,
+        Additionally, all the intersections are drawn as circles, white circles represent active intersections,
         and black circles represents inactive intersections.
         """
         vertices = []
@@ -198,7 +196,7 @@ class PIEnv(gymnasium.Env):
             else:
                 cv2.circle(dots_channel, cords, 5, color=-1.0, thickness=-1)
 
-        state = np.stack((ch_channel, heatmap_channel, dots_channel),axis=0)
+        state = np.stack((ch_channel, heatmap_channel, dots_channel), axis=0)
         return state
 
         # vertices = []
@@ -247,7 +245,7 @@ class PIEnv(gymnasium.Env):
         reward = 0
         if count_v > 0:
             sum_v = np.sum(self.heat_map * diff).astype(float)
-            reward = sum_v/count_v - (self.regularizer * count_v)*np.sign(sum_v)
+            reward = sum_v / count_v - (self.regularizer * count_v) * np.sign(sum_v)
 
         return reward
 
@@ -276,6 +274,27 @@ class PIEnv(gymnasium.Env):
         return heat_map
 
 
+if __name__ == "__main__":
+    # Initialize the environment
+    env = PIEnv(map="map_image.png")
 
+    # Reset the environment
+    state, _ = env.reset()
 
+    # Simulate steps in the environment
+    print("Starting simulation...")
+    for step in range(100):  # Run 10 steps
+        action = env.action_space.sample()  # Sample a random action
+        state, reward, _, _, _ = env.step(action)
+
+        print(f"Step {step + 1}:")
+        print(f"  Action: {action}")
+        print(f"  Reward: {reward}")
+
+        # Render and display the current state
+        rendered_map = env.render_with_vertices()
+
+    env.show(rendered_map)
+
+    print("Simulation completed.")
 
