@@ -21,6 +21,8 @@ class PIEnv(gymnasium.Env):
         self.state = None
         # regularizer for the reward - proportional to the size of the area added
         self.regularizer = regularizer
+        # To track previously toggled actions
+        self.action_history = set()
 
         image = cv2.imread(map)
         if clean is not None:
@@ -85,6 +87,7 @@ class PIEnv(gymnasium.Env):
         Current convex hull mask,
         Dot indicators.
         """
+        self.action_history.clear()  # Clear action history
         # reset all dictionaries
         self.convexhull = {}
         self.intersection_state_dict = dict.fromkeys(self.intersection_state_dict, False)
@@ -114,8 +117,16 @@ class PIEnv(gymnasium.Env):
         Indicators for episode termination or truncation (both False here).
         """
 
-        # Updates the state based on the selected intersection
+        # Check if the action has already been toggled
+        if action in self.action_history:
+            reward = -1.0  # Heavy penalty for repeated actions
+            info = {"message": "Repeated action - ignored"}
+            return self.state, reward, False, False, info
+
+        # Save the previous convex hull
         prev_convex_hull = self.convexhull.copy()
+
+        # Toggle the intersection state and add the action to history
         if self.intersection_state_dict[action]:
             self.intersection_state_dict[action] = False
             del self.convexhull[action]
@@ -123,20 +134,26 @@ class PIEnv(gymnasium.Env):
             self.intersection_state_dict[action] = True
             self.convexhull[action] = True
 
-        # get new convex hull state and R(s,s')
-        next_state = self._get_state()
+        self.action_history.add(action)  # Track toggled actions
 
-        # Calculates a reward based on the difference between the previous convex hull and the updated one after an action
+        # Generate the new state and calculate reward
+        next_state = self._get_state()
         reward = self._get_reward(prev_convex_hull)
+
+        # Penalize insignificant changes
+        if np.array_equal(self.convexhull, prev_convex_hull):
+            reward -= 0.5
+
+        # Update the environment state
+        self.state = next_state
 
         # Set termination and truncation flags to False
         terminated = False
         truncated = False
 
         # Always return `info` as a dictionary, even if it's empty
-        info = {}
+        info = {"message": "Action accepted"}
 
-        self.state = next_state
         return next_state, reward, terminated, truncated, info
 
     def render(self):
@@ -318,8 +335,8 @@ if __name__ == "__main__":
     env = make_vec_env(lambda: env, n_envs=1)
 
     #model = DQN("CnnPolicy", env, verbose=1, buffer_size=50, normalize_images=False)
-    model = DQN("MlpPolicy", env, verbose=1, buffer_size=50)
-    model.learn(total_timesteps=100)
+    model = DQN("MlpPolicy", env, verbose=1, buffer_size=5000)
+    model.learn(total_timesteps=10000)
 
     obs = env.reset()
     for step in range(10):
@@ -328,14 +345,9 @@ if __name__ == "__main__":
 
         # Each step represents a single interaction with the environment.
         print(f"Step {step + 1}:")
-
-        # The index of the action taken by the agent.
-        # the action corresponds to selecting or deselecting an intersection to include in the convex hull.
         print(f"  Action: {action}")
-
-        # The numerical feedback provided by the environment for the action taken.
-        # It measures how "good" or "bad" the action was in terms of the agent's objective.
         print(f"  Reward: {reward}")
+        print(f"  Info: {info[0]['message']}")
 
         if done:
             obs = env.reset()
