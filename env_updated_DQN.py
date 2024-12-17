@@ -322,22 +322,9 @@ if __name__ == "__main__":
     model.learn(total_timesteps=100)
 
     obs = env.reset()
-    for _ in range(10):
+    for step in range(10):
         action, _states = model.predict(obs, deterministic=True)
         obs, reward, done, info = env.step(action)
-        if done:
-            obs = env.reset()
-
-    env.close()
-    """
-    # Reset the environment
-    state, _ = env.reset()
-
-    # Simulate steps in the environment
-    print("Starting simulation...")
-    for step in range(100):  # Run 10 steps
-        action = env.action_space.sample()  # Sample a random action
-        state, reward, _, _, _ = env.step(action)
 
         # Each step represents a single interaction with the environment.
         print(f"Step {step + 1}:")
@@ -350,13 +337,13 @@ if __name__ == "__main__":
         # It measures how "good" or "bad" the action was in terms of the agent's objective.
         print(f"  Reward: {reward}")
 
-        # Render and display the current state
-    rendered_map = env.render_with_vertices()
+        if done:
+            obs = env.reset()
 
+    rendered_map = env.envs[0].env.render_with_vertices()
     cv2.imwrite("rendered_map.png", rendered_map)
-    env.show(rendered_map)
+    # Call the show method from the original environment
+    env.envs[0].env.show(rendered_map)
+    env.close()
 
     print("Simulation completed.")
-    """
-
-
