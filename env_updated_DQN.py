@@ -119,7 +119,7 @@ class PIEnv(gymnasium.Env):
 
         # Check if the action has already been toggled
         if action in self.action_history:
-            reward = -1.0  # Heavy penalty for repeated actions
+            reward = -0.1  # Light penalty for redundant actions
             info = {"message": "Repeated action - ignored"}
             return self.state, reward, False, False, info
 
@@ -140,10 +140,6 @@ class PIEnv(gymnasium.Env):
         next_state = self._get_state()
         reward = self._get_reward(prev_convex_hull)
 
-        # Penalize insignificant changes
-        if np.array_equal(self.convexhull, prev_convex_hull):
-            reward -= 0.5
-
         # Update the environment state
         self.state = next_state
 
@@ -153,6 +149,7 @@ class PIEnv(gymnasium.Env):
 
         # Always return `info` as a dictionary, even if it's empty
         info = {"message": "Action accepted"}
+        #print(f"Action History: {self.action_history}")
 
         return next_state, reward, terminated, truncated, info
 
@@ -263,7 +260,17 @@ class PIEnv(gymnasium.Env):
         Compares previous and current convex hulls.
         Computes reward based on: Heatmap values under new hull regions, Penalization for hull size.
         """
+        added_area = len(self.convexhull) - len(prev_convexhull)
+        reward = 0.0
 
+        if added_area > 0:
+            reward = added_area  # Reward proportional to area added
+        else:
+            reward -= 0.5  # Penalize insignificant changes
+
+        return reward
+
+        """
         # generate old convex hull
         vertices = []
         for vertex_id, state in prev_convexhull.items():
@@ -298,7 +305,7 @@ class PIEnv(gymnasium.Env):
             sum_v = np.sum(self.heat_map * diff).astype(float)
             reward = sum_v / count_v - (self.regularizer * count_v) * np.sign(sum_v)
 
-        return reward
+        return reward"""
 
     def _get_heatmap(self):
         """
@@ -335,19 +342,52 @@ if __name__ == "__main__":
     env = make_vec_env(lambda: env, n_envs=1)
 
     #model = DQN("CnnPolicy", env, verbose=1, buffer_size=50, normalize_images=False)
-    model = DQN("MlpPolicy", env, verbose=1, buffer_size=5000)
-    model.learn(total_timesteps=10000)
+    #model = DQN("MlpPolicy", env, verbose=1, buffer_size=5000)
+    model = DQN(
+        "MlpPolicy",
+        env,
+        verbose=1,
+        buffer_size=5000,
+        exploration_initial_eps=1.0,  # Start with full exploration
+        exploration_final_eps=0.1,  # End with low exploration
+        exploration_fraction=0.2  # Fraction of training spent decaying epsilon
+    )
+    model.learn(total_timesteps=50000)
 
     obs = env.reset()
     for step in range(10):
-        action, _states = model.predict(obs, deterministic=True)
+        #action, _states = model.predict(obs, deterministic=True)
+        # Allow a small chance for random exploration during testing
+        if np.random.rand() < 0.1:  # 10% chance of a random action
+            action = env.action_space.sample()
+        else:
+            action, _states = model.predict(obs, deterministic=True)
+
+        # Ensure action is scalar
+        if isinstance(action, (list, np.ndarray)):
+            action = int(action[0])  # Extract scalar action
+
+        # Step through the environment
         obs, reward, done, info = env.step(action)
+
+        # Safely extract the first environment's info
+        if isinstance(info, list) and len(info) > 0:
+            info_message = info[0].get('message', 'No message')
+        else:
+            info_message = 'No message'
 
         # Each step represents a single interaction with the environment.
         print(f"Step {step + 1}:")
         print(f"  Action: {action}")
         print(f"  Reward: {reward}")
-        print(f"  Info: {info[0]['message']}")
+        #print(f"  Info: {info[0]['message']}")
+        # Safely extract the first environment's info
+        if isinstance(info, list) and len(info) > 0:
+            info_message = info[0].get('message', 'No message')
+        else:
+            info_message = 'No message'
+
+        print(f"  Info: {info_message}")
 
         if done:
             obs = env.reset()
