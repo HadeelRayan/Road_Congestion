@@ -7,6 +7,101 @@ import stable_baselines3
 from stable_baselines3 import DQN
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.env_checker import check_env
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import random
+from collections import deque
+import matplotlib.pyplot as plt
+
+
+class QNetwork(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super(QNetwork, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, output_dim)
+        )
+
+    def forward(self, x):
+        return self.fc(x)
+
+
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.buffer = deque(maxlen=capacity)
+
+    def push(self, state, action, reward, next_state, done):
+        self.buffer.append((state, action, reward, next_state, done))
+
+    def sample(self, batch_size):
+        return random.sample(self.buffer, batch_size)
+
+    def __len__(self):
+        return len(self.buffer)
+
+
+class DQNAgent:
+    def __init__(self, input_dim, action_dim, lr=1e-3, gamma=0.99, buffer_size=10000):
+        self.action_dim = action_dim
+        self.gamma = gamma
+
+        self.q_net = QNetwork(input_dim, action_dim)
+        self.target_net = QNetwork(input_dim, action_dim)
+        self.target_net.load_state_dict(self.q_net.state_dict())
+
+        self.optimizer = optim.Adam(self.q_net.parameters(), lr=lr)
+        self.buffer = ReplayBuffer(buffer_size)
+        self.epsilon = 1.0  # Initial exploration rate
+        self.epsilon_decay = 0.995
+        self.epsilon_min = 0.1
+
+    def select_action(self, state):
+        if random.random() < self.epsilon:
+            return random.randint(0, self.action_dim - 1)  # Random action
+        else:
+            state = torch.FloatTensor(state).unsqueeze(0)  # Add batch dimension
+            state = state.flatten(start_dim=1)  # Flatten the state
+            q_values = self.q_net(state)
+            return q_values.argmax().item()
+
+    def update(self, batch_size):
+        if len(self.buffer) < batch_size:
+            return
+
+        # Sample a batch of experiences
+        batch = self.buffer.sample(batch_size)
+        states, actions, rewards, next_states, dones = zip(*batch)
+
+        states = torch.FloatTensor(np.array(states)).view(len(states), -1)
+        actions = torch.LongTensor(actions)
+        rewards = torch.FloatTensor(rewards)
+        next_states = torch.FloatTensor(np.array(next_states)).view(len(next_states), -1)
+        dones = torch.FloatTensor(dones)
+
+        # Compute Q-values for current states
+        q_values = self.q_net(states).gather(1, actions.unsqueeze(1)).squeeze()
+
+        # Compute target Q-values
+        with torch.no_grad():
+            target_q_values = rewards + self.gamma * self.target_net(next_states).max(1)[0] * (1 - dones)
+
+        # Compute loss
+        loss = nn.functional.mse_loss(q_values, target_q_values)
+
+        # Optimize the Q-network
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        # Update epsilon
+        self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
+
+    def sync_target_network(self):
+        self.target_net.load_state_dict(self.q_net.state_dict())
 
 
 class PIEnv(gymnasium.Env):
@@ -116,16 +211,47 @@ class PIEnv(gymnasium.Env):
         Reward,
         Indicators for episode termination or truncation (both False here).
         """
+        prev_vertices = [v for v in self.convexhull.values() if isinstance(v, tuple) and len(v) == 2]
+        prev_area = cv2.contourArea(np.array(prev_vertices, dtype=np.float32)) if len(prev_vertices) > 2 else 0
+
+        # Initialize reward and info
+        reward = 0
+        info = {"message": "Action accepted"}
 
         # Check if the action has already been toggled
-        if action in self.action_history:
-            reward = -0.1  # Light penalty for redundant actions
-            info = {"message": "Repeated action - ignored"}
-            return self.state, reward, False, False, info
+        if self.intersection_state_dict[action]:
+            reward = -0.5  # penalty for repeated actions
+            info = {"message": "Repeated action - heavily penalized"}
+        else:
+            # Update the convex hull
+            self.intersection_state_dict[action] = True
+            self.convexhull[action] = self.intersection_dict[action]
 
-        # Save the previous convex hull
-        prev_convex_hull = self.convexhull.copy()
+            # Calculate new area
+            vertices = [v for v in self.convexhull.values() if isinstance(v, tuple) and len(v) == 2]
+            if len(vertices) > 2:
+                #new_area = cv2.contourArea(np.array(vertices, dtype=np.float32))
+                vertices_array = np.array(vertices, dtype=np.int32).reshape((-1, 1, 2))
+                new_area = cv2.contourArea(vertices_array)
+            else:
+                new_area = 0
 
+            # Calculate area gain and reward
+            area_gain = new_area - prev_area
+            if area_gain > 0:
+                reward = max(area_gain * 0.001, 0.1)
+                info["message"] = f"Area increased by {area_gain:.2f}"
+            else:
+                reward = -0.1  # Small penalty for no significant area change
+                info["message"] = "No significant change in area"
+
+        # Update state
+        self.state = self._get_state()
+        done = len(self.convexhull) >= self.action_space.n  # Episode termination condition
+
+        return self.state, reward, done, False, info
+
+        """
         # Toggle the intersection state and add the action to history
         if self.intersection_state_dict[action]:
             self.intersection_state_dict[action] = False
@@ -133,12 +259,25 @@ class PIEnv(gymnasium.Env):
         else:
             self.intersection_state_dict[action] = True
             self.convexhull[action] = True
+        
+        # Toggle the intersection state
+        self.intersection_state_dict[action] = True
+        self.convexhull[action] = True
 
-        self.action_history.add(action)  # Track toggled actions
+        #self.action_history.add(action)  # Track toggled actions
 
         # Generate the new state and calculate reward
         next_state = self._get_state()
-        reward = self._get_reward(prev_convex_hull)
+        added_points = len(self.convexhull) - len(prev_convex_hull)
+        reward = added_points * 2.0  # Stronger reward for significant updates
+
+        # Penalize insignificant changes (e.g., minimal convex hull updates)
+        if added_points == 0:
+            reward -= 2.0  # Heavier penalty for no improvement
+
+        # Additional penalty for repeated actions
+        if self.intersection_state_dict[action]:
+            reward -= 5.0  # Strong penalty
 
         # Update the environment state
         self.state = next_state
@@ -152,6 +291,7 @@ class PIEnv(gymnasium.Env):
         #print(f"Action History: {self.action_history}")
 
         return next_state, reward, terminated, truncated, info
+        """
 
     def render(self):
         """
@@ -338,64 +478,75 @@ class PIEnv(gymnasium.Env):
 if __name__ == "__main__":
     # Initialize the environment
     env = PIEnv(map="map_image.png")
-    check_env(env)  # Check the environment for compatibility
-    env = make_vec_env(lambda: env, n_envs=1)
+    state_dim = 3 * 84 * 84  # Flattened state dimensions (3 channels of 84x84)
+    action_dim = env.action_space.n
 
-    #model = DQN("CnnPolicy", env, verbose=1, buffer_size=50, normalize_images=False)
-    #model = DQN("MlpPolicy", env, verbose=1, buffer_size=5000)
-    model = DQN(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        buffer_size=5000,
-        exploration_initial_eps=1.0,  # Start with full exploration
-        exploration_final_eps=0.1,  # End with low exploration
-        exploration_fraction=0.2  # Fraction of training spent decaying epsilon
-    )
-    model.learn(total_timesteps=50000)
+    agent = DQNAgent(input_dim=state_dim, action_dim=action_dim)
+    num_episodes = 1000
+    batch_size = 64
 
-    obs = env.reset()
-    for step in range(10):
-        #action, _states = model.predict(obs, deterministic=True)
-        # Allow a small chance for random exploration during testing
-        if np.random.rand() < 0.1:  # 10% chance of a random action
-            action = env.action_space.sample()
-        else:
-            action, _states = model.predict(obs, deterministic=True)
+    losses = []  # Track loss values
+    rewards_list = []  # Track rewards per episode
 
-        # Ensure action is scalar
-        if isinstance(action, (list, np.ndarray)):
-            action = int(action[0])  # Extract scalar action
+    for episode in range(100):
+        state, _ = env.reset()
+        state = state / 255.0  # Normalize state to [0, 1] range
+        total_reward = 0
 
-        # Step through the environment
-        obs, reward, done, info = env.step(action)
+        for step in range(100):
+            action = agent.select_action(state)
+            next_state, reward, done, _, _ = env.step(action)
+            next_state = next_state / 255.0
 
-        # Safely extract the first environment's info
-        if isinstance(info, list) and len(info) > 0:
-            info_message = info[0].get('message', 'No message')
-        else:
-            info_message = 'No message'
+            agent.buffer.push(state, action, reward, next_state, done)
+            state = next_state
+            total_reward += reward
 
-        # Each step represents a single interaction with the environment.
-        print(f"Step {step + 1}:")
-        print(f"  Action: {action}")
-        print(f"  Reward: {reward}")
-        #print(f"  Info: {info[0]['message']}")
-        # Safely extract the first environment's info
-        if isinstance(info, list) and len(info) > 0:
-            info_message = info[0].get('message', 'No message')
-        else:
-            info_message = 'No message'
+            """
+            # Render the environment and display it dynamically
+            rendered_env = env.render_with_vertices()
+            plt.imshow(cv2.cvtColor(rendered_env, cv2.COLOR_BGR2RGB))  # Convert BGR to RGB
+            plt.axis("off")
+            plt.title(f"Episode {episode}, Step {step}")
+            plt.pause(0.01)  # Small delay to show the image
+            plt.clf()  # Clear the previous frame
+            """
+            agent.update(batch_size)
 
-        print(f"  Info: {info_message}")
+            if done:
+                break
 
-        if done:
-            obs = env.reset()
+        rewards_list.append(total_reward)
+        agent.sync_target_network()
 
-    rendered_map = env.envs[0].env.render_with_vertices()
-    cv2.imwrite("rendered_map.png", rendered_map)
-    # Call the show method from the original environment
-    env.envs[0].env.show(rendered_map)
-    env.close()
+        # Periodically reset epsilon to encourage exploration
+        if episode % 50 == 0 or total_reward > 50:  # Every 50 episodes
+            rendered_map = env.render_with_vertices()
+            cv2.imwrite(f"rendered_map_episode_{episode}.png", rendered_map)
 
-    print("Simulation completed.")
+        #rewards_list.append(total_reward)
+        print(f"Episode: {episode}, Total Reward: {total_reward}, Epsilon: {agent.epsilon:.2f}")
+
+        """
+        # Render and display environment only at the end of episodes divisible by 10
+        if episode % 100 == 0 or episode == num_episodes - 1:
+            rendered_env = env.render_with_vertices()
+            plt.imshow(cv2.cvtColor(rendered_env, cv2.COLOR_BGR2RGB))  # Convert BGR to RGB for matplotlib
+            plt.axis("off")
+            plt.title(f"Rendered Environment - Episode {episode}")
+            plt.show()
+        """
+
+    # Save the final rendered environment
+    #final_rendered_map = env.render_with_vertices()
+    #cv2.imwrite("final_rendered_map.png", final_rendered_map)
+    #print("Final rendered map saved as 'final_rendered_map.png'.")
+
+    if len(rewards_list) > 0:
+        avg_reward = np.mean(rewards_list[-50:])
+    else:
+        avg_reward = 0
+
+    # Print summary statistics
+    print(f"Average Reward: {np.mean(rewards_list[-50:])}, Final Epsilon: {agent.epsilon:.2f}")
+    print("Training complete!")
